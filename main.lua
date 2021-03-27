@@ -1,6 +1,8 @@
+AddonVersion = "1.2.0"
 --soundfiles
 local LibCopyPaste = LibStub("LibCopyPaste-1.0")
 SelectedSound = ""
+local AceGUI = LibStub("AceGUI-3.0")
 
 sounds = {"Interface\\AddOns\\Jarbeatbox\\CustomSounds\\alert_bot_loop.ogg",
 "Interface\\AddOns\\Jarbeatbox\\CustomSounds\\ass_whip.ogg",
@@ -37,18 +39,40 @@ sounds = {"Interface\\AddOns\\Jarbeatbox\\CustomSounds\\alert_bot_loop.ogg",
 "Interface\\AddOns\\Jarbeatbox\\CustomSounds\\whatisthat.ogg",
 "Interface\\AddOns\\Jarbeatbox\\CustomSounds\\wow_main_theme.ogg"}
 
+matchSounds = {}
+
 --configs
 init = false;
 SLASH_JARBEATBOXMENU1, SLASH_JARBEATBOXMENU2, SLASH_JARBEATBOXMENU3 = "/jbm","/jbb","/jarbeatbox";
-
 playerName = UnitName('player')
-eventPrefix = "jarbeatbox"
+guildUsers = {}
+guildUsersCount = 0;
+soundEventPrefix = "jarbeatbox"
+messageType_Message = "MESSAGE"
+messageType_Login = "LOGIN"
+messageType_Logout = "LOGOUT"
+messageType_LoginSync = "LOGINSYNC"
+messageType_LogoutSync = "LOGOUTSYNC"
+
+
+function Split (inputstr, sep)
+    if sep == nil then
+            sep = "%s"
+    end
+    local t={}
+    for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
+            table.insert(t, str)
+    end
+    return t
+end
 
 --init
 local f = CreateFrame("Frame")
 
 f:RegisterEvent("CHAT_MSG_ADDON");
-C_ChatInfo.RegisterAddonMessagePrefix(eventPrefix);
+f:RegisterEvent("PLAYER_LOGIN");
+f:RegisterEvent("PLAYER_LOGOUT");
+C_ChatInfo.RegisterAddonMessagePrefix(soundEventPrefix);
 
 --ui
 local UIMenu = CreateFrame("Frame", "Jarbeatbox_Sound_Menu", UIParent, "BasicFrameTemplateWithInset");
@@ -63,13 +87,35 @@ UIMenu:SetSize(400,480);
 UIMenu:SetPoint("CENTER");
 UIMenu.title = UIMenu:CreateFontString(nil, "OVERLAY")
 UIMenu.title:SetFontObject("GameFontHighlight")
-UIMenu.title:SetPoint("CENTER", UIMenu.TitleBg, "CENTER", 0, 0)
+UIMenu.title:SetPoint("CENTER", UIMenu.TitleBg, "CENTER", 100, 0)
 UIMenu.title:SetText("Jarbeatbox Custom Sounds Menu")
+
 UIMenu:Hide();
 
-UIMenu.ScrollFrame = CreateFrame("ScrollFrame", nil, UIMenu, "UIPanelScrollFrameTemplate")
-UIMenu.ScrollFrame:SetPoint("TOPLEFT", UIMenu.Bg, "TOPLEFT", 0, -5)
-UIMenu.ScrollFrame:SetPoint("BOTTOMRIGHT", UIMenu.Bg, "RIGHT")
+UIMenu.SearchBox = CreateFrame("EditBox", "Jarbeatbox_SearchBox", UIMenu, "InputBoxTemplate");
+UIMenu.SearchBox:SetAutoFocus(false)
+
+UIMenu.SearchBox:SetScript("OnEscapePressed", function(self)
+    if self:GetText() == "" then
+        UIMenu:Hide();
+    else
+        self:SetText("");
+    end
+end)
+UIMenu.SearchBox:SetScript("OnTextChanged", function()
+    SearchSounds();
+end)
+UIMenu.SearchBox:SetPoint("Left", UIMenu.TitleBg, "Left", 4, 0);
+UIMenu.SearchBox:SetSize(100,20)
+
+UIMenu.ScrollFrame = AceGUI:Create("ScrollFrame", "Jarbeatbox_ScrollFrame", UIMenu, "UIPanelScrollFrameTemplate")
+_G["Jarbeatbox_ScrollFrame"] = UIMenu.ScrollFrame.frame
+tinsert(UISpecialFrames, "Jarbeatbox_ScrollFrame")
+UIMenu:SetScript("OnHide", function(widget) UIMenu.ScrollFrame.frame:Hide() end)
+
+UIMenu.ScrollFrame:SetParent(UIMenu);
+UIMenu.ScrollFrame:SetPoint("TOPLEFT", UIMenu.Bg, "TOPLEFT", 5, -5)
+UIMenu.ScrollFrame:SetPoint("BOTTOMRIGHT", UIMenu.Bg, "RIGHT", -7, 2)
 --selected sound frames
 UIMenu.Options = CreateFrame("Frame", "Jarbeatbox_Options_Menu_Parent", UIMenu);
 UIMenu.Options:SetPoint("TOPLEFT", UIMenu.Bg, "LEFT")
@@ -117,6 +163,7 @@ UIMenu.Options.Buttons.GuildButton = CreateFrame("Button", "Jarbeatbox_Sound_Men
 UIMenu.Options.Buttons.GuildButton:SetPoint("CENTER", UIMenu.Options.Buttons, "CENTER", 100, 45);
 UIMenu.Options.Buttons.GuildButton:SetSize(100,30);
 UIMenu.Options.Buttons.GuildButton:SetText("Guild");
+
 UIMenu.Options.Buttons.GuildButton:SetNormalFontObject("GameFontNormalLarge");
 UIMenu.Options.Buttons.GuildButton:SetScript("OnClick", function(self)
     SendSound("-g "..SelectedSound)
@@ -135,7 +182,11 @@ end)
 UIMenu.Options.Buttons.WhisperEditBox = CreateFrame("EditBox", "Jarbeatbox_Sound_Menu_Button_Whisper_EditBox", UIMenu.Options.Buttons, "InputBoxTemplate");
 UIMenu.Options.Buttons.WhisperEditBox:SetAutoFocus(false)
 UIMenu.Options.Buttons.WhisperEditBox:SetScript("OnEscapePressed", function(self)
-    UIMenu:Hide();
+    if self:GetText() == "" then
+        UIMenu:Hide();
+    else
+        self:SetText("");
+    end
 end)
 UIMenu.Options.Buttons.WhisperEditBox:SetPoint("CENTER", UIMenu.Options.Buttons, "CENTER", 102, -35);
 UIMenu.Options.Buttons.WhisperEditBox:SetSize(90,30)
@@ -168,43 +219,95 @@ line:SetColorTexture(.6 ,.6, .6, .6)
 line:SetSize(UIMenu.Bg:GetWidth()-12, 2)
 line:SetPoint("CENTER", UIMenu.Options.Buttons, "TOP", -1, -3)
 
-child = CreateFrame("Frame", nil, UIMenu.ScrollFrame);
-child:SetSize(395, 400);
+child = AceGUI:Create("Frame", nil, UIMenu.ScrollFrame);
+--child:SetSize(395, 400);
 
-UIMenu.ScrollFrame:SetScrollChild(child);
+UIMenu.ScrollFrame:AddChild(child);
 
-function SelectSoundOnClick(self, button, down)
-    SelectedSound = "Interface\\AddOns\\Jarbeatbox\\CustomSounds\\"..self:GetText();
-    UIMenu.Options.SelectedSoundText:SetText(self:GetText());
+function SelectSoundOnClick(self, button, down, four, five)
+    SelectedSound = "Interface\\AddOns\\Jarbeatbox\\CustomSounds\\"..self.readableText;
+    UIMenu.Options.SelectedSoundText:SetText(self.readableText);
 end
 
-function InitUiMenu()
-    for index, value in pairs(sounds) do
-        child["Jarbeatbox_Sound_Menu_Option"..index] = CreateFrame("Button", "Jarbeatbox_Sound_Menu_Option"..index, child, "GameMenuButtonTemplate");
-        child["Jarbeatbox_Sound_Menu_Option"..index]:SetScript("OnClick", SelectSoundOnClick);
-        child["Jarbeatbox_Sound_Menu_Option"..index]:SetSize(380,28);
-        child["Jarbeatbox_Sound_Menu_Option"..index]:SetPoint("TOP", 0, (-30 * index) + 26);
-        child["Jarbeatbox_Sound_Menu_Option"..index]:SetText(string.sub(value, 42));
-        child["Jarbeatbox_Sound_Menu_Option"..index]:SetNormalFontObject("GameFontNormalLarge");
-        child["Jarbeatbox_Sound_Menu_Option"..index]:SetHighlightFontObject("GameFontHighlightLarge");
+function InitUiMenu(matchSounds)
+    UIMenu.ScrollFrame:ReleaseChildren();
+    for index, value in pairs(matchSounds) do
+        local childWidget = AceGUI:Create("Button", value, child, "GameMenuButtonTemplate");
+        childWidget.readableText = string.sub(value, 42);
+        childWidget:SetCallback("OnClick", SelectSoundOnClick);
+        childWidget:SetFullWidth(true);
+        --childWidget:SetSize(380,28);
+        childWidget:SetText(childWidget.readableText);
+        --childWidget:SetNormalFontObject("GameFontNormalLarge");
+        --childWidget:SetHighlightFontObject("GameFontHighlightLarge");
+        UIMenu.ScrollFrame:AddChild(childWidget);
     end
 end
 
-
-if init == false then
-    InitUiMenu();
-    init = true;
+function SearchSounds()
+    local localText = UIMenu.SearchBox:GetText()
+    if localText == "" then
+        matchSounds = sounds;
+    else
+        for index, value in pairs(sounds) do
+            if(string.find(value, localText)) then
+                tinsert(matchSounds, value); 
+            end
+        end
+    end
+    InitUiMenu(matchSounds)
+    matchSounds = {}
 end
 
 --register events
-
 f:SetScript("OnEvent", function(self, event, ...)
-    local prefix, msg = select(1, ...);
-    if prefix == eventPrefix then
-        if(currentHandle ~= nil) then
-            StopSound(currentHandle)
+    if event == "CHAT_MSG_ADDON" then
+        local prefix, payload = select(1, ...);
+        if prefix == soundEventPrefix then
+            local type, msg;
+            local params = Split(payload);
+            type = params[1]
+            msg = params[2]
+            if type == messageType_Message then
+                if(currentHandle ~= nil) then
+                    StopSound(currentHandle)
+                end
+                _, currentHandle = PlaySoundFile(msg, "Master");
+            elseif type == messageType_Login or type == messageType_LoginSync then
+
+                if guildUsers[msg] then
+                    return;
+                else
+                    guildUsers[msg] = AddonVersion;
+                    guildUsersCount = guildUsersCount + 1;
+                    UIMenu.Options.Buttons.GuildButton:SetText("Guild".." ("..guildUsersCount..")");
+                end
+
+                if type == messageType_Login then
+                    C_ChatInfo.SendAddonMessage(soundEventPrefix, "LOGINSYNC "..playerName, "GUILD")
+                end
+            elseif type == messageType_Logout or type == messageType_LogoutSync then
+                if guildUsers[msg] then
+                    guildUsers[msg] = nil;
+                    guildUsersCount = guildUsersCount - 1;
+                    UIMenu.Options.Buttons.GuildButton:SetText("Guild".." ("..guildUsersCount..")");
+                else
+                    return;
+                end               
+
+                if type == messageType_Logout then
+                    C_ChatInfo.SendAddonMessage(soundEventPrefix, "LOGOUTSYNC "..playerName, "GUILD")
+                end     
+            end       
         end
-        _, currentHandle = PlaySoundFile(msg, "Master");
+    end
+
+    if event == "PLAYER_LOGIN" then
+        C_ChatInfo.SendAddonMessage(soundEventPrefix, "LOGIN "..playerName, "GUILD")
+    end
+    
+    if event == "PLAYER_LOGOUT" then
+        C_ChatInfo.SendAddonMessage(userLoginStatePrefix, "LOGOUT "..playerName, "GUILD")
     end
 end)
 
@@ -212,8 +315,10 @@ end)
 function SlashCmdList.JARBEATBOXMENU(message, editbox)
     if UIMenu:IsShown() then
         UIMenu:Hide();
+        UIMenu.ScrollFrame.frame:Hide();
     else
         UIMenu:Show();
+        UIMenu.ScrollFrame.frame:Show();
     end
 end
 
@@ -285,8 +390,8 @@ function SendSound(message)
     end
 
     if(channel == "SELF" or channel == "WHISPER") then
-        C_ChatInfo.SendAddonMessage(eventPrefix, messageToSend, "WHISPER", target)
+        C_ChatInfo.SendAddonMessage(soundEventPrefix, messageType_Message.." "..messageToSend, "WHISPER", target)
     else
-        C_ChatInfo.SendAddonMessage(eventPrefix, messageToSend, channel)
+        C_ChatInfo.SendAddonMessage(soundEventPrefix, messageType_Message.." "..messageToSend, channel)
     end
 end
